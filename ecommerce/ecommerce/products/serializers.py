@@ -18,3 +18,10 @@ class ProductSerializer(serializers.ModelSerializer):
     class Meta:
         model = Product
         fields = "__all__"
+    
+    def validate(self, data):
+        if data['price'] <= 0:
+            raise serializers.ValidationError("Price must be greater than zero")
+        if data['stock_quantity'] < 0:
+            raise serializers.ValidationError("Stock quantity cannot be negative")
+        return data
