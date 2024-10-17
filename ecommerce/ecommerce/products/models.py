@@ -2,17 +2,35 @@ from django.db import models
 from mptt.models import MPTTModel, TreeForeignKey
 from django.core.exceptions import ValidationError
 from django.utils.text import slugify
-
 from .fields import OrderField
+from django.contrib.auth.models import AbstractUser
+
+
+class User(AbstractUser):
+    email = models.EmailField(unique=True)
+
+    groups = models.ManyToManyField(
+        'auth.Group',
+        related_name='custom_user_set',
+        blank=True,
+    )
+    user_permissions = models.ManyToManyField(
+        'auth.Permission',
+        related_name='custom_user_permissions_set',
+        blank=True,
+    )
+
+    def __str__(self):
+        return self.username
 
 
 class ActiveQueryset(models.QuerySet):
     def isactive(self):
         return self.filter(is_active=True)
 
+
 class Category(MPTTModel):
     name = models.CharField(max_length=100, unique=True)
-    slug = models.SlugField(max_length=255)
     parent = TreeForeignKey("self", on_delete=models.PROTECT, null=True, blank=True)
     is_active = models.BooleanField(default=True)
     objects = ActiveQueryset.as_manager()
@@ -23,6 +41,7 @@ class Category(MPTTModel):
     def __str__(self):
         return self.name
 
+
 class Brand(models.Model):
     name = models.CharField(max_length=100)
     is_active = models.BooleanField(default=True)
@@ -31,21 +50,32 @@ class Brand(models.Model):
     def __str__(self):
         return self.name
 
+
 class Product(models.Model):
     name = models.CharField(max_length=100)
-    slug = models.SlugField(max_length=255)
-    description =models.TextField(blank=True)
-    is_digital = models.BooleanField(default=False) # Defines if the product is shippable or to download
-    brand = models.ForeignKey(Brand, on_delete=models.CASCADE) #If the Brand is deleted we won't have Product (it all will be deleted)
-    category = TreeForeignKey(
-        "Category", on_delete=models.SET_NULL, null=True, blank=True
-    ) # null and blank defines that some products may not be part of the category  
-    is_active = models.BooleanField(default=True) # This will allow us to keep the product active or not
+    description = models.TextField(blank=True)
+    is_digital = models.BooleanField(default=False)
+    brand = models.ForeignKey(Brand, on_delete=models.CASCADE)
+    category = TreeForeignKey("Category", on_delete=models.SET_NULL, null=True, blank=True)
+    is_active = models.BooleanField(default=True)
     product_type = models.ForeignKey("ProductType", on_delete=models.PROTECT, related_name="product")
+    created_at = models.DateTimeField(auto_now_add=True)
+    
+    # Fields moved from ProductLine
+    price = models.DecimalField(decimal_places=2, max_digits=10)
+    sku = models.CharField(max_length=100)
+    stock_qty = models.IntegerField()
+    attribute_value = models.ManyToManyField(
+        "AttributeValue", 
+        through="ProductAttributeValue", 
+        related_name="product_attribute_value"
+    )
+    
     objects = ActiveQueryset.as_manager()
 
     def __str__(self):
         return self.name
+
 
 class Attribute(models.Model):
     name = models.CharField(max_length=100)
@@ -65,33 +95,31 @@ class AttributeValue(models.Model):
         return f"{self.attribute.name}-{self.attribute_value}"
 
 
-class ProductLineAttributeValue(models.Model):
+class ProductAttributeValue(models.Model):
     attribute_value = models.ForeignKey(
         AttributeValue,
         on_delete=models.CASCADE,
         related_name="product_attribute_value_av",
     )
-    product_line = models.ForeignKey(
-        "ProductLine",
+    product = models.ForeignKey(
+        Product,
         on_delete=models.CASCADE,
         related_name="product_attribute_value_pl",
     )
 
     class Meta:
-        unique_together = ("attribute_value", "product_line")
+        unique_together = ("attribute_value", "product")
 
     def clean(self):
         qs = (
-            ProductLineAttributeValue.objects.filter(
-                attribute_value=self.attribute_value
-            )
-            .filter(product_line=self.product_line)
+            ProductAttributeValue.objects.filter(attribute_value=self.attribute_value)
+            .filter(product=self.product)
             .exists()
         )
 
         if not qs:
             iqs = Attribute.objects.filter(
-                attribute_value__product_line_attribute_value=self.product_line
+                attribute_value__product_attribute_value_av=self.product
             ).values_list("pk", flat=True)
 
             if self.attribute_value.attribute.id in list(iqs):
@@ -99,47 +127,20 @@ class ProductLineAttributeValue(models.Model):
 
     def save(self, *args, **kwargs):
         self.full_clean()
-        return super(ProductLineAttributeValue, self).save(*args, **kwargs)
-
-class ProductLine(models.Model):
-    price = models.DecimalField(decimal_places=2, max_digits=10)
-    sku = models.CharField(max_length=100)
-    stock_qty = models.IntegerField()
-    product = models.ForeignKey(Product, on_delete=models.CASCADE, related_name="product_line")
-    is_active = models.BooleanField(default=False) # This will allow us to keep the product active or not
-    order = OrderField(unique_for_field="product", blank=True)
-    attribute_value = models.ManyToManyField(
-        AttributeValue, 
-        through="ProductLineAttributeValue", 
-        related_name="product_line_attribute_value",
-    )
-    objects = ActiveQueryset.as_manager()
-
-    def clean(self):
-        qs = ProductLine.objects.filter(product=self.product)
-        for obj in qs:
-            if self.id != obj.id and self.order == obj.order:
-                raise ValidationError("Duplicate value.")
-
-    def save(self, *args, **kwargs):
-        self.full_clean()
-        return super(ProductLine, self).save(*args, **kwargs)
-
-    def __str__(self):
-        return str(self.sku)
+        return super(ProductAttributeValue, self).save(*args, **kwargs)
 
 
-class ProductImage(models.Model):    
+class ProductImage(models.Model):
     alternative_text = models.CharField(max_length=100)
-    url = models.ImageField(upload_to=None, default="sample.jpg")
-    productline = models.ForeignKey(ProductLine, on_delete=models.CASCADE, related_name="product_image")
-    order = OrderField(unique_for_field="productline", blank=True)
+    url = models.ImageField(upload_to='product_images/')
+    product = models.ForeignKey(Product, on_delete=models.CASCADE, related_name="product_image")
+    order = OrderField(unique_for_field="product", blank=True)
 
     def clean(self):
-        qs = ProductImage.objects.filter(productline=self.productline)
+        qs = ProductImage.objects.filter(product=self.product)
         for obj in qs:
             if self.id != obj.id and self.order == obj.order:
-                raise ValidationError("Duplicate value.")
+                raise ValidationError("Duplicate order value.")
 
     def save(self, *args, **kwargs):
         self.full_clean()
@@ -147,6 +148,7 @@ class ProductImage(models.Model):
 
     def __str__(self):
         return str(self.order)
+
 
 class ProductType(models.Model):
     name = models.CharField(max_length=100)
@@ -161,7 +163,6 @@ class ProductType(models.Model):
 
 
 class ProductTypeAttribute(models.Model):
-
     product_type = models.ForeignKey(
         ProductType,
         on_delete=models.CASCADE,

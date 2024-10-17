@@ -1,34 +1,65 @@
 from rest_framework import serializers
-from .models import Brand, Category, Product, ProductLine, ProductImage, Attribute, AttributeValue
+from .models import Brand, Category, Product, ProductImage, Attribute, AttributeValue
+from django.contrib.auth.models import User
+from rest_framework.validators import UniqueValidator
+from django.contrib.auth.password_validation import validate_password
 
+# User Serializer
+class UserSerializer(serializers.ModelSerializer):
+    email = serializers.EmailField(
+        required=True,
+        validators=[UniqueValidator(queryset=User.objects.all())]
+    )
+    password = serializers.CharField(write_only=True, required=True, validators=[validate_password])
+    password2 = serializers.CharField(write_only=True, required=True)
 
+    class Meta:
+        model = User
+        fields = ('username', 'password', 'password2', 'email', 'first_name', 'last_name')
 
+    def validate(self, attrs):
+        if attrs['password'] != attrs['password2']:
+            raise serializers.ValidationError({"password": "Password fields didn't match."})
+        return attrs
+
+    def create(self, validated_data):
+        user = User.objects.create(
+            username=validated_data['username'],
+            email=validated_data['email'],
+            first_name=validated_data['first_name'],
+            last_name=validated_data['last_name']
+        )
+        user.set_password(validated_data['password'])
+        user.save()
+        return user
+
+# Category Serializer
 class CategorySerializer(serializers.ModelSerializer):
     category_name = serializers.CharField(source="name")
 
     class Meta:
         model = Category
-        # exclude = ("id",)
-        fields = ["category_name",]  
-        # Will only include the name and display, we also changed the display name from 'name' to 'category_name'
+        fields = ["category_name",]  # Change display name to 'category_name'
 
+# Brand Serializer
 class BrandSerializer(serializers.ModelSerializer):
     class Meta:
         model = Brand
-        exclude = ("id",)   # excludes the id section and display the rest
-        # fields = "__all__"
-    
+        exclude = ("id",)  # Exclude the 'id' field
+
+# Product Image Serializer
 class ProductImageSerializer(serializers.ModelSerializer):
     class Meta:
         model = ProductImage
-        exclude = ("id", "productline")
-    
+        fields = ('alternative_text', 'url', 'order')
+
+# Attribute Serializer
 class AttributeSerializer(serializers.ModelSerializer):
     class Meta:
         model = Attribute
         fields = ("name", "id")
 
-
+# Attribute Value Serializer
 class AttributeValueSerializer(serializers.ModelSerializer):
     attribute = AttributeSerializer(many=False)
 
@@ -39,68 +70,39 @@ class AttributeValueSerializer(serializers.ModelSerializer):
             "attribute_value",
         )
 
-class ProductLineSerializer(serializers.ModelSerializer):
-    product_image = ProductImageSerializer(many=True)
-
-    class Meta:
-        model = ProductLine
-        fields = (
-            "price", 
-            "stock_qty",
-            "order",
-            "product_image",
-            "attribute_value",
-        )
-        # fields = "__all__"
-    
-    def to_representation(self, instance):
-        data = super().to_representation(instance)
-        av_data = data.pop("attribute_value", [])
-        attr_values = {}
-
-        if isinstance(av_data, list):
-            # Fetch the AttributeValue instances based on IDs
-            attribute_values = AttributeValue.objects.filter(id__in=av_data).select_related('attribute')
-
-            for item in attribute_values:
-                attr_values[item.attribute.id] = item.attribute_value
-
-        data.update({"specification": attr_values})
-
-        return data
-
+# Product Serializer
 class ProductSerializer(serializers.ModelSerializer):
     brand_name = serializers.CharField(source="brand.name")
     category_name = serializers.CharField(source="category.name")
-    product_line = ProductLineSerializer(many=True)
-    attribute = serializers.SerializerMethodField()
+    product_image = ProductImageSerializer(many=True)
+    attribute_value = AttributeValueSerializer(many=True)
+    created_at = serializers.DateTimeField(read_only=True)
 
     class Meta:
         model = Product
         fields = (
-            "name", 
-            "slug", 
-            "description", 
-            "brand_name", 
-            "category_name", 
-            "product_line",
-            "attribute",
+            "name",
+            "description",
+            "brand_name",
+            "category_name",
+            "price",  # Added price directly to Product
+            "sku",    # Added SKU directly to Product
+            "stock_qty",  # Added stock_qty directly to Product
+            "product_image",  # Added product_image
+            "attribute_value",  # Added attribute_value directly to Product
+            "created_at",
         )
-        # fields = "__all__"
-    
-    def get_attribute(self, obj):
-        attribute = Attribute.objects.filter(product_type_attribute__product__id=obj.id)
-        return AttributeSerializer(attribute, many=True).data
 
     def to_representation(self, instance):
         data = super().to_representation(instance)
-        av_data = data.pop("attribute")
-        attr_values = {}
+        
+        # Custom representation for attributes
+        attr_data = data.pop("attribute_value", [])
+        attribute_values = {}
 
-        for key in av_data:
-            attr_values.update({key["id"]: key["name"]})
-            
-        data.update({"specification_type": attr_values})
+        for item in attr_data:
+            attribute_values[item['attribute']['name']] = item['attribute_value']
+
+        data.update({"specification": attribute_values})
 
         return data
-
