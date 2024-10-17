@@ -23,6 +23,7 @@ INSTALLED_APPS = [
     # External Packages
     'rest_framework',
     'drf_spectacular',
+    'django_filters',
     #Internal Apps
     'ecommerce.products',  # django will not find the app with out ecommerce. since we created it inside the projects folder
     "mptt",
@@ -57,6 +58,7 @@ TEMPLATES = [
     },
 ]
 
+
 WSGI_APPLICATION = "ecommerce.wsgi.application"
 
 
@@ -90,12 +92,31 @@ USE_TZ = True
 
 
 STATIC_URL = "static/"
+STATIC_ROOT = os.path.join(BASE_DIR, 'staticfiles')
+
+MEDIA_URL = '/media/'
+MEDIA_ROOT = os.path.join(BASE_DIR, 'media')
 
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
 REST_FRAMEWORK = {
-    'DEFAULT_SCHEMA_CLASS': 'drf_spectacular.openapi.AutoSchema'
+    'DEFAULT_SCHEMA_CLASS': 'drf_spectacular.openapi.AutoSchema',
+
+    'DEFAULT_AUTHENTICATION_CLASSES': (
+        'rest_framework_simplejwt.authentication.JWTAuthentication',
+    ),
+    
+    # Add Pagination class and Filter Backend
+    'DEFAULT_PAGINATION_CLASS': 'rest_framework.pagination.PageNumberPagination',
+    'PAGE_SIZE': 10,  # Default number of items per page
+    
+    'DEFAULT_FILTER_BACKENDS': [
+        'django_filters.rest_framework.DjangoFilterBackend',  # Filter backend
+        'rest_framework.filters.SearchFilter',                # Search backend
+        'rest_framework.filters.OrderingFilter',              # Ordering backend (optional)
+    ],
 }
+
 
 SPECTACULAR_SETTINGS = {
     'TITLE': "Ecommerce Product API",
